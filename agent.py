@@ -3,16 +3,11 @@ import logging
 import os
 import signal
 import sys
-from contextlib import AsyncExitStack
 from typing import Optional
 
 import typer
-from langchain_core.messages import HumanMessage, ToolMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import Command
 from rich.console import Console
 
-from functions.config import get_local_tools
 from functions.guardrails import (
     GuardrailError,
     guardrails_enabled,
@@ -20,10 +15,9 @@ from functions.guardrails import (
     validate_input,
     validate_output,
 )
-from graph import build_graph
-from mcp_servers import load_mcp_tools_from_servers
+from memory import load_history, save_history
+from pydantic_agent import create_agent_with_mcp
 from tracing import setup_logging, setup_tracing
-from utils import extract_text
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -32,58 +26,29 @@ _MAGENTA = "\033[35m"
 _GREEN = "\033[32m"
 _RESET = "\033[0m"
 
+_DB_PATH = "checkpoints.db"
 
-async def stream_tokens(app, inputs_or_command, config: dict) -> str:
-    """Streams tokens from the model and returns the full response."""
-    buffer = []
+
+async def stream_response(agent, user_input: str, history: list) -> tuple[str, list]:
+    """Streams agent output token-by-token and returns (full_text, updated_history)."""
+    buffer: list[str] = []
     print(_MAGENTA, end="", flush=True)
-    async for event in app.astream_events(inputs_or_command, config=config, version="v2"):
-        if event["event"] == "on_chat_model_stream":
-            text = extract_text(event["data"]["chunk"].content)
-            if text:
-                print(text, end="", flush=True)
-                buffer.append(text)
+    async with agent.run_stream(user_input, message_history=history) as result:
+        async for chunk in result.stream_text(delta=True):
+            chunk = str(chunk)
+            print(chunk, end="", flush=True)
+            buffer.append(chunk)
+        new_history = result.all_messages()
     print(_RESET)
-    return validate_output("".join(buffer))
-
-
-async def handle_interrupt(app, config: dict) -> None:
-    """Handles human-in-the-loop interrupts: shows pending tool calls and asks for confirmation."""
-    state = await app.aget_state(config)
-    while state.next:
-        last_msg = state.values["messages"][-1]
-        console.print("\n[Pending tool calls]", style="yellow bold")
-        for tc in last_msg.tool_calls:
-            console.print(f"  {tc['name']}({tc['args']})", style="yellow")
-        confirm = input("Allow? [y/N] ").strip().lower()
-        if confirm == "y":
-            await stream_tokens(app, Command(resume=True), config)
-        else:
-            tool_messages = [
-                ToolMessage(content="Tool call rejected by user.", tool_call_id=tc["id"])
-                for tc in last_msg.tool_calls
-            ]
-            await app.aupdate_state(config, {"messages": tool_messages}, as_node="tools")
-            await stream_tokens(app, None, config)
-        state = await app.aget_state(config)
+    return validate_output("".join(buffer)), new_history
 
 
 async def run_repl(thread_id: str, human_in_loop: bool):
     setup_tracing()
-    async with AsyncExitStack() as stack:
-        checkpointer = await stack.enter_async_context(
-            AsyncSqliteSaver.from_conn_string("checkpoints.db")
-        )
-        mcp_tools = await load_mcp_tools_from_servers(stack)
-        interrupt_before = ["tools"] if human_in_loop else []
-        app = build_graph(
-            get_local_tools() + mcp_tools,
-            checkpointer=checkpointer,
-            interrupt_before=interrupt_before,
-        )
+    agent = await create_agent_with_mcp(human_in_loop=human_in_loop)
 
-        config = {"configurable": {"thread_id": thread_id}}
-        inputs_base = {"user_id": os.getenv("USER", "user"), "session_metadata": {}}
+    async with agent.run_mcp_servers():
+        config_base = {"user_id": os.getenv("USER", "user"), "session_metadata": {}}
         while True:
             try:
                 user_input = input(f"{_GREEN}>{_RESET} ").strip()
@@ -103,9 +68,18 @@ async def run_repl(thread_id: str, human_in_loop: bool):
                 if not await is_safe(user_input):
                     console.print("Blocked: input flagged as unsafe.", style="red")
                     continue
-            inputs = {**inputs_base, "messages": [HumanMessage(content=user_input)]}
-            await stream_tokens(app, inputs, config)
-            await handle_interrupt(app, config)
+
+            history = await load_history(_DB_PATH, thread_id)
+            try:
+                response, new_history = await stream_response(agent, user_input, history)
+                await save_history(_DB_PATH, thread_id, new_history)
+            except Exception as e:
+                if "connection" in str(e).lower():
+                    logger.error("Could not connect to LLM: %s", e)
+                    console.print("I am unable to connect to a language model.", style="red")
+                else:
+                    logger.error("Model invocation failed: %s", e)
+                    console.print(f"I'm sorry, I encountered an error: {e}", style="red")
 
 
 cli = typer.Typer()
@@ -113,7 +87,7 @@ cli = typer.Typer()
 
 @cli.command()
 def chat(
-    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider (ollama, openai, gemini, anthropic, groq, mistral, openrouter, cohere, together, fireworks, deepseek, xai)"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider (openai, ollama)"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override the default model for the selected provider"),
     thread_id: str = typer.Option("repl", "--thread-id", "-t", help="Conversation thread ID for memory persistence"),
     guardrails: bool = typer.Option(True, "--guardrails/--no-guardrails", help="Enable or disable input/output guardrails"),

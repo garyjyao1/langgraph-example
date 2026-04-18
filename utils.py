@@ -1,8 +1,9 @@
 def extract_text(content) -> str:
-    """Normalizes LangChain message content to a plain string.
+    """Normalises agent response content to a plain string.
 
-    Some providers (e.g. Anthropic) return content as a list of typed blocks
-    like [{"type": "text", "text": "..."}] instead of a bare string.
+    PydanticAI returns ``result.output`` as a plain ``str`` for text-only
+    agents, so this helper is mainly used for streaming chunks which may
+    arrive as ``str`` or as a list of typed blocks from some providers.
     """
     if isinstance(content, str):
         return content

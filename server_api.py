@@ -1,17 +1,14 @@
 import logging
 import os
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from functions.config import get_local_tools
 from functions.guardrails import (
     GuardrailError,
     guardrails_enabled,
@@ -19,36 +16,29 @@ from functions.guardrails import (
     validate_input,
     validate_output,
 )
-from graph import build_graph
-from mcp_servers import load_mcp_tools_from_servers
+from memory import load_history, save_history
+from pydantic_agent import create_agent_with_mcp
 from tracing import setup_logging, setup_tracing
-from utils import extract_text
 
 logger = logging.getLogger(__name__)
 
 _agent = None
+_mcp_ctx = None
+
+_DB_PATH = "checkpoints.db"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _agent
+    global _agent, _mcp_ctx
     setup_tracing()
-    async with AsyncExitStack() as stack:
-        checkpointer = await stack.enter_async_context(
-            AsyncSqliteSaver.from_conn_string("checkpoints.db")
-        )
-        mcp_tools = await load_mcp_tools_from_servers(stack)
-        human_in_loop = os.environ.get("HUMAN_IN_LOOP", "false").lower() != "false"
-        interrupt_before = ["tools"] if human_in_loop else []
-        _agent = build_graph(
-            get_local_tools() + mcp_tools,
-            checkpointer=checkpointer,
-            interrupt_before=interrupt_before,
-        )
+    human_in_loop = os.environ.get("HUMAN_IN_LOOP", "false").lower() != "false"
+    _agent = await create_agent_with_mcp(human_in_loop=human_in_loop)
+    async with _agent.run_mcp_servers():
         yield
 
 
-app = FastAPI(title="langgraph-example", lifespan=lifespan)
+app = FastAPI(title="pydantic-ai-example", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -79,21 +69,17 @@ async def check_guardrails(message: str) -> None:
 
 @app.get("/")
 async def root():
-    return {"message": "It works on my machine!", "name": "langgraph-example"}
+    return {"message": "It works on my machine!", "name": "pydantic-ai-example"}
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Returns the final agent reply."""
     await check_guardrails(request.message)
-    inputs = {
-        "messages": [HumanMessage(content=request.message)],
-        "user_id": request.user_id,
-        "session_metadata": request.session_metadata,
-    }
-    config = {"configurable": {"thread_id": request.thread_id}}
-    result = await _agent.ainvoke(inputs, config=config)
-    response = extract_text(result["messages"][-1].content)
+    history = await load_history(_DB_PATH, request.thread_id)
+    result = await _agent.run(request.message, message_history=history)
+    await save_history(_DB_PATH, request.thread_id, result.all_messages())
+    response = result.output
     return ChatResponse(
         response=validate_output(response) if guardrails_enabled() else response,
         thread_id=request.thread_id,
@@ -107,18 +93,13 @@ async def chat_stream(request: ChatRequest):
     await check_guardrails(request.message)
 
     async def generate():
-        inputs = {
-            "messages": [HumanMessage(content=request.message)],
-            "user_id": request.user_id,
-            "session_metadata": request.session_metadata,
-        }
-        config = {"configurable": {"thread_id": request.thread_id}}
+        history = await load_history(_DB_PATH, request.thread_id)
         try:
-            async for event in _agent.astream_events(inputs, config=config, version="v2"):
-                if event["event"] == "on_chat_model_stream":
-                    content = extract_text(event["data"]["chunk"].content)
-                    if content:
-                        yield validate_output(content) if guardrails_enabled() else content
+            async with _agent.run_stream(request.message, message_history=history) as result:
+                async for chunk in result.stream_text(delta=True):
+                    chunk = str(chunk)
+                    yield validate_output(chunk) if guardrails_enabled() else chunk
+                await save_history(_DB_PATH, request.thread_id, result.all_messages())
         except Exception as e:
             logger.error("Stream error: %s", e)
             yield f"\n[Error: {e}]"

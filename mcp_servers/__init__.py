@@ -1,10 +1,13 @@
+"""MCP server connectivity helpers.
+
+Returns reachable ``MCPServerStreamableHTTP`` URLs; the actual
+``MCPServerStreamableHTTP`` objects are created inside ``pydantic_agent.py``
+so the agent's lifetime owns the connection context.
+"""
+
 import logging
-from contextlib import AsyncExitStack
 
 import httpx
-from langchain_mcp_adapters.tools import load_mcp_tools
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
 from rich.console import Console
 
 from mcp_servers.config import mcp_servers
@@ -13,25 +16,17 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-async def load_mcp_tools_from_servers(stack: AsyncExitStack) -> list:
-    tools = []
+async def get_reachable_mcp_urls() -> list[str]:
+    """Returns a list of MCP server URLs that are currently reachable."""
+    reachable: list[str] = []
     async with httpx.AsyncClient() as client:
         for mcp in mcp_servers:
             url = mcp["url"]
             try:
-                await client.get(url, timeout=2)
-            except Exception:
-                logger.warning("MCP server not reachable, skipping: %s", url)
-                continue
-            try:
-                read, write, _ = await stack.enter_async_context(
-                    streamable_http_client(url)
-                )
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                tools.extend(await load_mcp_tools(session))
+                await client.get(url, timeout=2.0)
+                reachable.append(url)
                 logger.info("Connected to MCP: %s", url)
                 console.print(f"Connected to MCP server: {url}", style="green")
-            except Exception as e:
-                logger.warning("Could not connect to %s: %s", url, e)
-    return tools
+            except Exception:
+                logger.warning("MCP server not reachable, skipping: %s", url)
+    return reachable

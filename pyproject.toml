@@ -1,5 +1,5 @@
 [project]
-name = "langgraph-example"
+name = "pydantic-ai-example"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,20 +9,9 @@ dependencies = [
     "aiofiles==24.1.0",
     "fastmcp==3.2.3",
     "httpx==0.28.1",
-    "langchain==1.2.15",
-    "langchain-openai==1.1.12",
-    "langchain-google-genai==4.2.1",
-    "langchain-anthropic==1.4.0",
-    "langchain-groq==1.1.2",
-    "langchain-mistralai==1.1.2",
-    "langchain-openrouter==0.2.1",
-    "langchain-cohere",
-    "langchain-together",
-    "langchain-fireworks",
-    "langchain-mcp-adapters==0.2.2",
-    "mcp==1.27.0",
+    "pydantic-ai[openai]==1.56.0",
+    "aiosqlite==0.20.0",
     "ddgs==9.13.0",
-    "langgraph-checkpoint-sqlite==3.0.3",
     "typer",
     "rich",
 ]

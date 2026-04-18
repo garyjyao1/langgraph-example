@@ -30,35 +30,49 @@ The project has three entry points: an interactive REPL (`agent.py`), an HTTP AP
 ### Agent (`agent.py`)
 
 An async interactive REPL that:
-1. Attempts to connect to each MCP server listed in `mcp_servers/config.py` (skips unreachable ones)
-2. Loads local function tools from `functions/config.py`
-3. Builds a LangGraph `StateGraph` with an agent node and a `ToolNode`
-4. Loops on `input()` and streams responses via `app.astream`
+1. Probes each configured MCP server (skips unreachable ones)
+2. Builds a PydanticAI `Agent` via `pydantic_agent.create_agent_with_mcp()`
+3. Enters `agent.run_mcp_servers()` context to maintain MCP connections
+4. Loops on `input()`, loads thread history from SQLite, streams tokens via `agent.run_stream()`
+5. Saves updated history back to SQLite after each turn
 
 ### HTTP API (`server_api.py`)
 
 A FastAPI app that wraps the same agent logic:
 - `POST /chat` — returns the final agent reply as JSON
-- `POST /chat/stream` — streams each agent step as plain text
+- `POST /chat/stream` — streams each token as plain text
 
-The agent and MCP sessions are initialized once at startup via FastAPI lifespan and reused across requests.
+The agent and MCP connections are initialised once at startup via FastAPI lifespan and reused across requests.
 
 ### LLM Factory (`llm_factory.py`)
 
-Maps the `LLM_PROVIDER` env var to the correct LangChain chat model. Supported providers: `ollama` (default, OpenAI-compat), `openai`, `gemini`, `anthropic`, `azure` (Azure OpenAI), `meta` (Llama API, OpenAI-compat), `deepseek` (OpenAI-compat), `mistral`, `xai` (OpenAI-compat), `openrouter`. Each provider has sensible defaults for `temperature` and `max_tokens`. The model name can be overridden via `LLM_MODEL`.
+Maps the `LLM_PROVIDER` env var to a PydanticAI `OpenAIModel`. Supported providers:
+- `ollama` (default) — local Ollama via OpenAI-compatible endpoint
+- `openai` — standard OpenAI API
 
-Default models per provider are defined in `_DEFAULT_MODELS`. Override with `LLM_MODEL` at runtime:
-```bash
-LLM_MODEL=llama3.1 ./run-cli-agent.sh
-LLM_PROVIDER=openai LLM_MODEL=gpt-4o python agent.py
-```
+Override the model name with `LLM_MODEL`.
+
+### PydanticAI Agent (`pydantic_agent.py`)
+
+Core agent module. Replaces the former `graph.py` (LangGraph `StateGraph`):
+- `build_agent(tools, mcp_urls, human_in_loop)` — creates a `pydantic_ai.Agent` with tools and `MCPServerStreamableHTTP` MCP servers
+- `create_agent_with_mcp(human_in_loop)` — probes MCP servers then calls `build_agent`
+- Human-in-the-loop: tools are wrapped with `_wrap_hitl()` when `HUMAN_IN_LOOP=true`
+
+### Memory (`memory.py`)
+
+Replaces LangGraph's SQLite checkpointer. Stores per-thread `ModelMessage` lists:
+- `load_history(db_path, thread_id)` → `list[ModelMessage]`
+- `save_history(db_path, thread_id, messages)` → persists to SQLite via aiosqlite
+
+Messages are serialised with `ModelMessagesTypeAdapter` (JSON).
 
 ### Local Tools (`functions/`)
 
-- `functions/machine.py` — filesystem and network tools (`list_files`, `read_file`, `run_df`, `run_du`, `run_hostname`, `run_ifconfig`, `run_netstat`, `get_current_user`)
+- `functions/machine.py` — filesystem and network tools
 - `functions/web.py` — `search` via DuckDuckGo
-- `functions/math.py` — `calculate_math_expression` using safe AST evaluation (no `eval`)
-- `functions/bash.py` — `run_bash` executes shell commands with a 30s timeout and a dangerous command denylist
+- `functions/math.py` — `calculate_math_expression` using safe AST evaluation
+- `functions/bash.py` — `run_bash` executes shell commands with a 30s timeout and denylist
 - `functions/config.py` — `get_local_tools()` returns the full list
 
 **Pattern for adding a local tool:** define a function in the appropriate module, add it to `get_local_tools()` in `functions/config.py`.
@@ -68,15 +82,9 @@ LLM_PROVIDER=openai LLM_MODEL=gpt-4o python agent.py
 Applied on every input and output in both the REPL and the HTTP API:
 
 - `validate_input` — blocks prompt injection, adult content, and violence/weapons patterns; enforces max input length
-- `is_safe` — LLM-as-judge: a second LLM call classifies the input before the agent processes it; the LLM is instantiated once at module load (`_llm`) and reused across calls
+- `is_safe` — LLM-as-judge using a dedicated PydanticAI `Agent`; classifies input as safe/unsafe
 - `validate_output` — redacts PII (SSN, email, phone number, credit card) from agent responses
-- `run_bash` denylist — blocks dangerous shell commands (`rm -rf /`, fork bomb, `shutdown`, etc.)
-
-### Memory (`MemorySaver`)
-
-The agent uses LangGraph's `MemorySaver` checkpointer to persist conversation history across turns. Each conversation is identified by a `thread_id`:
-- REPL: fixed `thread_id = "repl"` per session
-- HTTP API: caller-supplied `thread_id` in the request body (defaults to `"default"`)
+- `run_bash` denylist — blocks dangerous shell commands
 
 ### MCP Server (`mcp_servers/example/`)
 
@@ -85,27 +93,16 @@ A FastAPI app that mounts two independent FastMCP sub-apps:
 - `/math_mcp` — served by `tools/math_tools.py`
 - `/perf-mcp` — served by `tools/perf_tools.py`
 
-Both MCP servers also expose their tools as plain FastAPI REST routes (auto-registered via a loop over the `math_tools` / `perf_tools` lists). The server runs on port `58080`.
-
-**Pattern for adding an MCP tool:** define a private function `_fn(...)`, register it with `mcp.tool()(_fn)`, and append it to the module's `*_tools` list.
+The MCP URLs are configured in `mcp_servers/config.py`. Reachability is checked at startup.
 
 ### Environment Variables
 
-| Variable             | Default                  | Purpose                                       |
-|----------------------|--------------------------|-----------------------------------------------|
-| `LLM_PROVIDER`       | `ollama`                 | LLM backend for the agent                     |
-| `LLM_MODEL`          | _(provider default)_     | Override the model name for the selected provider |
-| `OPENAI_API_KEY`          | —                        | Required when using `openai`                      |
-| `GEMINI_API_KEY`          | —                        | Required when using `gemini`                      |
-| `ANTHROPIC_API_KEY`       | —                        | Required when using `anthropic`                   |
-| `AZURE_OPENAI_API_KEY`    | —                        | Required when using `azure`                       |
-| `AZURE_OPENAI_ENDPOINT`   | —                        | Required when using `azure`                       |
-| `AZURE_OPENAI_API_VERSION`| `2025-01-01-preview`     | Azure OpenAI API version                          |
-| `LLAMA_API_KEY`           | —                        | Required when using `meta`                        |
-| `DEEPSEEK_API_KEY`        | —                        | Required when using `deepseek`                    |
-| `MISTRAL_API_KEY`         | —                        | Required when using `mistral`                     |
-| `XAI_API_KEY`             | —                        | Required when using `xai`                         |
-| `OPENROUTER_API_KEY`      | —                        | Required when using `openrouter`                  |
-| `GUARDRAILS_ENABLED` | `true`                   | Enable input/output guardrails                |
-| `HUMAN_IN_LOOP`      | `false`                  | Prompt user to confirm tool calls before exec |
-| `LANGCHAIN_API_KEY`  | —                        | Enables LangSmith tracing when set            |
+| Variable             | Default                         | Purpose                                       |
+|----------------------|---------------------------------|-----------------------------------------------|
+| `LLM_PROVIDER`       | `ollama`                        | LLM backend for the agent (`openai`, `ollama`)|
+| `LLM_MODEL`          | _(provider default)_            | Override the model name for the selected provider |
+| `OPENAI_API_KEY`     | —                               | Required when using `openai`                  |
+| `OLLAMA_BASE_URL`    | `http://localhost:11434/v1`     | Ollama base URL (OpenAI-compatible)           |
+| `GUARDRAILS_ENABLED` | `true`                          | Enable input/output guardrails                |
+| `HUMAN_IN_LOOP`      | `false`                         | Prompt user to confirm tool calls before exec |
+| `LOGFIRE_TOKEN`      | —                               | Enables Logfire tracing when set              |

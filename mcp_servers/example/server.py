@@ -30,7 +30,7 @@ app = FastAPI(
 async def root():
     """Root endpoint."""
     return {
-        "app_name": "langgraph-example",
+        "app_name": "pydantic-ai-example",
         "message": "It works on my machine!",
         "endpoints": {
             "docs": "/docs",
