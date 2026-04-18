@@ -1,5 +1,5 @@
 def extract_text(content) -> str:
-    """Normalises agent response content to a plain string.
+    """Normalizes agent response content to a plain string.
 
     PydanticAI returns ``result.output`` as a plain ``str`` for text-only
     agents, so this helper is mainly used for streaming chunks which may
