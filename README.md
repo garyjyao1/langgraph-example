@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/garyjyao1/langgraph-example/actions/workflows/build.yaml/badge.svg)](https://github.com/garyjyao1/langgraph-example/actions/workflows/build.yaml)
 
-A side-by-side comparison of two Python AI agent frameworks — **LangGraph** and **PydanticAI** — implemented against the same feature set so you can make an informed choice for your own agent.
+A monorepo demonstrating a production-quality agentic application implemented against the same feature set in two Python AI frameworks — **LangGraph** and **PydanticAI** — so you can make an informed choice.
 
 ## Implementations
 
@@ -17,9 +17,54 @@ A side-by-side comparison of two Python AI agent frameworks — **LangGraph** an
 
 See [COMPARISON.md](COMPARISON.md) for a detailed side-by-side breakdown.
 
+## Repository Structure
+
+```
+langgraph-example/
+├── pyproject.toml          # uv workspace root
+├── shared/                 # shared Python package (uv workspace member)
+│   ├── pyproject.toml
+│   └── functions/          # tool implementations (bash, web, math, config)
+│       ├── bash.py
+│       ├── config.py
+│       ├── math.py
+│       └── web.py
+├── langgraph/              # LangGraph implementation (uv workspace member)
+│   ├── graph.py            # StateGraph definition
+│   ├── agent.py            # CLI REPL
+│   ├── server_api.py       # FastAPI HTTP API
+│   ├── llm_factory.py      # LLM provider factory
+│   ├── functions/
+│   │   └── guardrails.py   # LangChain-backed guardrails
+│   ├── mcp_servers/
+│   │   └── __init__.py     # langchain-mcp-adapters connection logic
+│   └── pyproject.toml
+├── pydantic-ai/            # PydanticAI implementation (uv workspace member)
+│   ├── pydantic_agent.py   # Agent + MCP + HITL setup
+│   ├── memory.py           # SQLite message history
+│   ├── agent.py            # CLI REPL
+│   ├── server_api.py       # FastAPI HTTP API
+│   ├── llm_factory.py      # LLM provider factory
+│   ├── functions/
+│   │   └── guardrails.py   # PydanticAI-backed guardrails
+│   ├── mcp_servers/
+│   │   └── __init__.py     # native MCPServerStreamableHTTP connection logic
+│   └── pyproject.toml
+├── mcp_servers/            # shared standalone MCP server
+│   └── example/
+│       ├── server.py
+│       └── tools/
+├── deployment/             # shared Helm charts
+├── frontend/               # shared React frontend
+├── static/                 # shared static assets (playground UI)
+├── templates/              # shared HTML templates
+├── COMPARISON.md           # detailed framework comparison
+└── README.md               # this file
+```
+
 ## Quickstart
 
-Each implementation is self-contained with its own `pyproject.toml`. Run `uv sync` inside the relevant directory.
+Each implementation is a uv workspace member. Install from the repo root or from within each impl directory.
 
 ### LangGraph
 
@@ -37,41 +82,26 @@ uv sync
 ./run-cli-agent.sh
 ```
 
-## Repository Structure
-
-```
-langgraph-example/
-├── langgraph/          # LangGraph + LangChain implementation
-│   ├── graph.py        # StateGraph definition (the core agent loop)
-│   ├── agent.py        # CLI REPL
-│   ├── server_api.py   # FastAPI HTTP API
-│   ├── llm_factory.py  # LLM provider factory
-│   ├── functions/      # Local tools (filesystem, web, math, bash)
-│   ├── mcp_servers/    # Optional MCP server connections
-│   └── pyproject.toml
-├── pydantic-ai/        # PydanticAI implementation
-│   ├── pydantic_agent.py  # Agent + MCP + HITL setup
-│   ├── memory.py          # SQLite message history
-│   ├── agent.py           # CLI REPL
-│   ├── server_api.py      # FastAPI HTTP API
-│   ├── llm_factory.py     # LLM provider factory
-│   ├── functions/         # Local tools (filesystem, web, math, bash)
-│   ├── mcp_servers/       # Optional MCP server connections
-│   └── pyproject.toml
-├── COMPARISON.md       # Detailed framework comparison
-└── README.md           # This file
-```
-
-## Comparing the Implementations
-
-To see the structural differences directly:
+### Shared MCP Server (optional)
 
 ```bash
-# File-level diff between the two implementations
-diff -rq --exclude='uv.lock' --exclude='*.pyc' langgraph/ pydantic-ai/
-
-# Diff a specific file (e.g. the agent entrypoint)
-diff langgraph/agent.py pydantic-ai/agent.py
+cd mcp_servers/example/
+uv run server.py
+# or: ./run-mcp-server.sh
 ```
 
-Or open the two folders side-by-side in any IDE (VS Code: right-click folder → "Open in Integrated Terminal", then use the diff view).
+## How shared code works
+
+`shared/` is a uv workspace package that exposes a `functions` [namespace package](https://peps.python.org/pep-0420/). Each implementation also has its own `functions/` directory containing `guardrails.py` (the only tool that differs between frameworks). Python 3.3+ namespace packages transparently merge both `functions/` directories at import time — no special import paths needed.
+
+```
+import path for 'functions.bash'     → shared/functions/bash.py
+import path for 'functions.guardrails' → langgraph/functions/guardrails.py  (or pydantic-ai/)
+```
+
+## Comparing the implementations
+
+```bash
+# File-level delta between the two implementations
+diff -rq --exclude='uv.lock' --exclude='*.pyc' langgraph/ pydantic-ai/
+```

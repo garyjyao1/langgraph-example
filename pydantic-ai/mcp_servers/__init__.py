@@ -10,7 +10,10 @@ import logging
 import httpx
 from rich.console import Console
 
-from mcp_servers.config import mcp_servers
+_MCP_SERVERS = [
+    {"url": "http://localhost:58080/math_mcp/"},
+    {"url": "http://localhost:58080/perf-mcp/"},
+]
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -20,7 +23,7 @@ async def get_reachable_mcp_urls() -> list[str]:
     """Returns a list of MCP server URLs that are currently reachable."""
     reachable: list[str] = []
     async with httpx.AsyncClient() as client:
-        for mcp in mcp_servers:
+        for mcp in _MCP_SERVERS:
             url = mcp["url"]
             try:
                 await client.get(url, timeout=2.0)

@@ -4,10 +4,20 @@ LABEL maintainer="Jerrico Gamis <jecklgamis@gmail.com>"
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-dev
+# Install workspace deps (build context = repo root)
+COPY pyproject.toml ./
+COPY shared/ ./shared/
+COPY langgraph/pyproject.toml langgraph/uv.lock* ./langgraph/
+RUN uv sync --frozen --no-dev --package langgraph-example
 
-COPY . .
+# Copy framework-specific source
+COPY langgraph/ ./langgraph/
+
+# Copy shared operational assets
+COPY static/ ./static/
+COPY templates/ ./templates/
+
+WORKDIR /app/langgraph
 
 EXPOSE 8000
 

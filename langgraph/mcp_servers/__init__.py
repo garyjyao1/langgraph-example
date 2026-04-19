@@ -7,7 +7,10 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from rich.console import Console
 
-from mcp_servers.config import mcp_servers
+_MCP_SERVERS = [
+    {"url": "http://localhost:58080/math_mcp/"},
+    {"url": "http://localhost:58080/perf-mcp/"},
+]
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -16,7 +19,7 @@ console = Console()
 async def load_mcp_tools_from_servers(stack: AsyncExitStack) -> list:
     tools = []
     async with httpx.AsyncClient() as client:
-        for mcp in mcp_servers:
+        for mcp in _MCP_SERVERS:
             url = mcp["url"]
             try:
                 await client.get(url, timeout=2)
