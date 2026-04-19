@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 
 import uvicorn
 from fastapi import FastAPI
@@ -30,7 +31,7 @@ app = FastAPI(
 async def root():
     """Root endpoint."""
     return {
-        "app_name": "langgraph-example",
+        "app_name": os.environ.get("APP_NAME", "agentic-example"),
         "message": "It works on my machine!",
         "endpoints": {
             "docs": "/docs",

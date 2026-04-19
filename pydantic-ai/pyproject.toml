@@ -1,0 +1,22 @@
+[project]
+name = "pydantic-ai-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "shared",
+    "fastapi==0.135.3",
+    "uvicorn==0.44.0",
+    "jinja2==3.1.6",
+    "fastmcp==3.2.3",
+    "pydantic-ai[openai]==1.56.0",
+    "aiosqlite==0.20.0",
+    "typer",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.0.3",
+]
+
+[tool.uv]
+default-groups = ["dev"]

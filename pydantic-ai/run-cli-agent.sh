@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-uv run server.py
+uv run agent.py "$@"

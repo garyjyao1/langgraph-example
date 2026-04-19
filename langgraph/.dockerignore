@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+.env
+.idea/
+.pytest_cache/
+frontend/
+mcp_servers/
+*.sh
+pydantic-ai/
+.github/
+deployment/
