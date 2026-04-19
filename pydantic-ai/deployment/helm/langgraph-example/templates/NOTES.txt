@@ -1,0 +1,12 @@
+langgraph-example has been deployed.
+
+{{- if .Values.ingress.enabled }}
+Access the app at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+To access locally:
+  kubectl port-forward svc/{{ include "langgraph-example.fullname" . }} 8000:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  open http://localhost:8000
+{{- end }}

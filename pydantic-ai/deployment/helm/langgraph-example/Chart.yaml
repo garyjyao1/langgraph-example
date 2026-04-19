@@ -1,0 +1,6 @@
+apiVersion: v2
+name: langgraph-example
+description: This is the langgraph-example Helm chart.
+type: application
+version: 1.0.0-rc.1
+appVersion: "1.0.0-rc.1"
